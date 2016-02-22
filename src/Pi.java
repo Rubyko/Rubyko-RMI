@@ -2,7 +2,7 @@
 import java.io.Serializable;
 import java.math.BigDecimal;
 
-public class Pi implements Task<BigDecimal>, Serializable {
+public class Pi implements Serializable {
 
     private static final long serialVersionUID = 227L;
 

@@ -101,8 +101,6 @@ import java.util.Properties;
 import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import rubyko.sun.rmi.log.LogHandler;
-import rubyko.sun.rmi.log.ReliableLog;
 import rubyko.sun.rmi.registry.RegistryImpl;
 import rubyko.sun.rmi.runtime.NewThreadAction;
 import rubyko.sun.rmi.server.UnicastServerRef;
@@ -110,7 +108,6 @@ import rubyko.sun.rmi.transport.LiveRef;
 import rubyko.sun.security.action.GetBooleanAction;
 import rubyko.sun.security.action.GetIntegerAction;
 import rubyko.sun.security.action.GetPropertyAction;
-import rubyko.sun.security.provider.PolicyFile;
 import rubyko.com.sun.rmi.rmid.ExecPermission;
 import rubyko.com.sun.rmi.rmid.ExecOptionPermission;
 
@@ -139,8 +136,6 @@ public class Activation implements Serializable {
 
     /** indicate compatibility with JDK 1.2 version of class */
     private static final long serialVersionUID = 2921265612698155191L;
-    private static final byte MAJOR_VERSION = 1;
-    private static final byte MINOR_VERSION = 0;
 
     /** exec policy object */
     private static Object execPolicy;
@@ -154,17 +149,11 @@ public class Activation implements Serializable {
     private Map<ActivationGroupID,GroupEntry> groupTable =
         new ConcurrentHashMap<>();
 
-    private byte majorVersion = MAJOR_VERSION;
-    private byte minorVersion = MINOR_VERSION;
 
     /** number of simultaneous group exec's */
     private transient int groupSemaphore;
     /** counter for numbering groups */
     private transient int groupCounter;
-    /** reliable log to hold descriptor table */
-    private transient ReliableLog log;
-    /** number of updates since last snapshot */
-    private transient int numUpdates;
 
     /** the java command */
     // accessed by GroupEntry
@@ -172,9 +161,6 @@ public class Activation implements Serializable {
     /** timeout on wait for child process to be created or destroyed */
     private static final long groupTimeout =
         getInt("sun.rmi.activation.groupTimeout", 60000);
-    /** take snapshot after this many updates */
-    private static final int snapshotInterval =
-        getInt("sun.rmi.activation.snapshotInterval", 200);
     /** timeout on wait for child process to be created */
     private static final long execTimeout =
         getInt("sun.rmi.activation.execTimeout", 30000);
@@ -192,7 +178,6 @@ public class Activation implements Serializable {
     private transient ActivationSystem system;
     private transient ActivationSystem systemStub;
     private transient ActivationMonitor monitor;
-    private transient Registry registry;
     private transient volatile boolean shuttingDown = false;
     private transient volatile Object startupLock;
     private transient Thread shutdownHook;
@@ -206,78 +191,7 @@ public class Activation implements Serializable {
      */
     private Activation() {}
 
-    /**
-     * Recover activation state from the reliable log and initialize
-     * activation services.
-     */
-    private static void startActivation(int port,
-                                        RMIServerSocketFactory ssf,
-                                        String logName,
-                                        String[] childArgs)
-        throws Exception
-    {
-        ReliableLog log = new ReliableLog(logName, new ActLogHandler());
-        Activation state = (Activation) log.recover();
-        state.init(port, ssf, log, childArgs);
-    }
-
-    /**
-     * Initialize the Activation instantiation; start activation
-     * services.
-     */
-    private void init(int port,
-                      RMIServerSocketFactory ssf,
-                      ReliableLog log,
-                      String[] childArgs)
-        throws Exception
-    {
-        // initialize
-        this.log = log;
-        numUpdates = 0;
-        shutdownHook =  new ShutdownHook();
-        groupSemaphore = getInt("sun.rmi.activation.groupThrottle", 3);
-        groupCounter = 0;
-        Runtime.getRuntime().addShutdownHook(shutdownHook);
-
-        // Use array size of 0, since the value from calling size()
-        // may be out of date by the time toArray() is called.
-        ActivationGroupID[] gids =
-            groupTable.keySet().toArray(new ActivationGroupID[0]);
-
-        synchronized (startupLock = new Object()) {
-            // all the remote methods briefly synchronize on startupLock
-            // (via checkShutdown) to make sure they don't happen in the
-            // middle of this block.  This block must not cause any such
-            // incoming remote calls to happen, or deadlock would result!
-            activator = new ActivatorImpl(port, ssf);
-            activatorStub = (Activator) RemoteObject.toStub(activator);
-            system = new ActivationSystemImpl(port, ssf);
-            systemStub = (ActivationSystem) RemoteObject.toStub(system);
-            monitor = new ActivationMonitorImpl(port, ssf);
-            initCommand(childArgs);
-            registry = new SystemRegistryImpl(port, null, ssf, systemStub);
-
-            if (ssf != null) {
-                synchronized (initLock) {
-                    initDone = true;
-                    initLock.notifyAll();
-                }
-            }
-        }
-        startupLock = null;
-
-        // restart services
-        for (int i = gids.length; --i >= 0; ) {
-            try {
-                getGroupEntry(gids[i]).restartServices();
-            } catch (UnknownGroupException e) {
-                System.err.println(
-                    getTextResource("rmid.restart.group.warning"));
-                e.printStackTrace();
-            }
-        }
-    }
-
+   
     /**
      * Previous versions used HashMap instead of ConcurrentHashMap.
      * Replace any HashMaps found during deserialization with
@@ -294,85 +208,6 @@ public class Activation implements Serializable {
             idTable = new ConcurrentHashMap<>(idTable);
         }
     }
-
-    private static class SystemRegistryImpl extends RegistryImpl {
-
-        private static final String NAME = ActivationSystem.class.getName();
-        private static final long serialVersionUID = 4877330021609408794L;
-        private final ActivationSystem systemStub;
-
-        SystemRegistryImpl(int port,
-                           RMIClientSocketFactory csf,
-                           RMIServerSocketFactory ssf,
-                           ActivationSystem systemStub)
-            throws RemoteException
-        {
-            super(port, csf, ssf);
-            this.systemStub = systemStub;
-        }
-
-        /**
-         * Returns the activation system stub if the specified name
-         * matches the activation system's class name, otherwise
-         * returns the result of invoking super.lookup with the specified
-         * name.
-         */
-        public Remote lookup(String name)
-            throws RemoteException, NotBoundException
-        {
-            if (name.equals(NAME)) {
-                return systemStub;
-            } else {
-                return super.lookup(name);
-            }
-        }
-
-        public String[] list() throws RemoteException {
-            String[] list1 = super.list();
-            int length = list1.length;
-            String[] list2 = new String[length + 1];
-            if (length > 0) {
-                System.arraycopy(list1, 0, list2, 0, length);
-            }
-            list2[length] = NAME;
-            return list2;
-        }
-
-        public void bind(String name, Remote obj)
-            throws RemoteException, AlreadyBoundException, AccessException
-        {
-            if (name.equals(NAME)) {
-                throw new AccessException(
-                    "binding ActivationSystem is disallowed");
-            } else {
-                super.bind(name, obj);
-            }
-        }
-
-        public void unbind(String name)
-            throws RemoteException, NotBoundException, AccessException
-        {
-            if (name.equals(NAME)) {
-                throw new AccessException(
-                    "unbinding ActivationSystem is disallowed");
-            } else {
-                super.unbind(name);
-            }
-        }
-
-
-        public void rebind(String name, Remote obj)
-            throws RemoteException, AccessException
-        {
-            if (name.equals(NAME)) {
-                throw new AccessException(
-                    "binding ActivationSystem is disallowed");
-            } else {
-                super.rebind(name, obj);
-            }
-        }
-    }
-
 
     class ActivatorImpl extends RemoteServer implements Activator {
         // Because ActivatorImpl has a fixed ObjID, it can be
@@ -513,7 +348,6 @@ public class Activation implements Serializable {
             GroupEntry entry = new GroupEntry(id, desc);
             // table insertion must take place before log update
             groupTable.put(id, entry);
-            addLogRecord(new LogRegisterGroup(id, desc));
             return id;
         }
 
@@ -666,20 +500,7 @@ public class Activation implements Serializable {
                  */
                 unexport(monitor);
 
-                /*
-                 * Close log file, fix for 4243264: rmid shutdown thread
-                 * interferes with remote calls in progress.  Make sure
-                 * the log file is only closed when it is impossible for
-                 * its closure to interfere with any pending remote calls.
-                 * We close the log when all objects in the rmid VM are
-                 * unexported.
-                 */
-                try {
-                    synchronized (log) {
-                        log.close();
-                    }
-                } catch (IOException e) {
-                }
+
 
             } finally {
                 /*
@@ -690,24 +511,6 @@ public class Activation implements Serializable {
                  */
                 System.err.println(getTextResource("rmid.daemon.shutdown"));
                 System.exit(0);
-            }
-        }
-    }
-
-    /** Thread to destroy children in the event of abnormal termination. */
-    private class ShutdownHook extends Thread {
-        ShutdownHook() {
-            super("rmid ShutdownHook");
-        }
-
-        public void run() {
-            synchronized (Activation.this) {
-                shuttingDown = true;
-            }
-
-            // destroy all child processes (groups) quickly
-            for (GroupEntry groupEntry : groupTable.values()) {
-                groupEntry.shutdownFast();
             }
         }
     }
@@ -913,9 +716,6 @@ public class Activation implements Serializable {
             // table insertion must take place before log update
             idTable.put(id, groupID);
 
-            if (addRecord) {
-                addLogRecord(new LogRegisterObject(id, desc));
-            }
         }
 
         synchronized void unregisterObject(ActivationID id, boolean addRecord)
@@ -930,9 +730,6 @@ public class Activation implements Serializable {
 
             // table removal must take place before log update
             idTable.remove(id);
-            if (addRecord) {
-                addLogRecord(new LogUnregisterObject(id));
-            }
         }
 
         synchronized void unregisterGroup(boolean addRecord)
@@ -953,10 +750,6 @@ public class Activation implements Serializable {
             reset();
             childGone();
 
-            // removal should be recorded before log update
-            if (addRecord) {
-                addLogRecord(new LogUnregisterGroup(groupID));
-            }
         }
 
         synchronized ActivationDesc setActivationDesc(ActivationID id,
@@ -972,10 +765,6 @@ public class Activation implements Serializable {
                 restartSet.add(id);
             } else {
                 restartSet.remove(id);
-            }
-            // restart information should be recorded before log update
-            if (addRecord) {
-                addLogRecord(new LogUpdateDesc(id, desc));
             }
 
             return oldDesc;
@@ -997,9 +786,6 @@ public class Activation implements Serializable {
             ActivationGroupDesc oldDesc = this.desc;
             this.desc = desc;
             // state update should occur before log update
-            if (addRecord) {
-                addLogRecord(new LogUpdateGroupDesc(id, desc));
-            }
             return oldDesc;
         }
 
@@ -1093,14 +879,6 @@ public class Activation implements Serializable {
                     } catch (InterruptedException e) {
                     }
                 }
-            }
-        }
-
-        // no synchronization to avoid delay wrt getInstantiator
-        void shutdownFast() {
-            Process p = child;
-            if (p != null) {
-                p.destroy();
             }
         }
 
@@ -1229,7 +1007,6 @@ public class Activation implements Serializable {
                     ++incarnation;
                     watchdog = new Watchdog();
                     watchdog.start();
-                    addLogRecord(new LogGroupIncarnation(id, incarnation));
 
                     // handle child I/O streams before writing to child
                     PipeWriter.plugTogetherPair
@@ -1468,67 +1245,7 @@ public class Activation implements Serializable {
         }
     }
 
-    /**
-     * Add a record to the activation log. If the number of updates
-     * passes a predetermined threshold, record a snapshot.
-     */
-    private void addLogRecord(LogRecord rec) throws ActivationException {
-        synchronized (log) {
-            checkShutdown();
-            try {
-                log.update(rec, true);
-            } catch (Exception e) {
-                numUpdates = snapshotInterval;
-                System.err.println(getTextResource("rmid.log.update.warning"));
-                e.printStackTrace();
-            }
-            if (++numUpdates < snapshotInterval) {
-                return;
-            }
-            try {
-                log.snapshot(this);
-                numUpdates = 0;
-            } catch (Exception e) {
-                System.err.println(
-                    getTextResource("rmid.log.snapshot.warning"));
-                e.printStackTrace();
-                try {
-                    // shutdown activation system because snapshot failed
-                    system.shutdown();
-                } catch (RemoteException ignore) {
-                    // can't happen
-                }
-                // warn the client of the original update problem
-                throw new ActivationException("log snapshot failed", e);
-            }
-        }
-    }
-
-    /**
-     * Handler for the log that knows how to take the initial snapshot
-     * and apply an update (a LogRecord) to the current state.
-     */
-    private static class ActLogHandler extends LogHandler {
-
-        ActLogHandler() {
-        }
-
-        public Object initialSnapshot()
-        {
-            /**
-             * Return an empty Activation object.  Log will update
-             * this object with recovered state.
-             */
-            return new Activation();
-        }
-
-        public Object applyUpdate(Object update, Object state)
-            throws Exception
-        {
-            return ((LogRecord) update).apply(state);
-        }
-
-    }
+   
 
     /**
      * Abstract class for all log records. The subclass contains
@@ -1540,222 +1257,6 @@ public class Activation implements Serializable {
         /** indicate compatibility with JDK 1.2 version of class */
         private static final long serialVersionUID = 8395140512322687529L;
         abstract Object apply(Object state) throws Exception;
-    }
-
-    /**
-     * Log record for registering an object.
-     */
-    private static class LogRegisterObject extends LogRecord {
-        /** indicate compatibility with JDK 1.2 version of class */
-        private static final long serialVersionUID = -6280336276146085143L;
-        private ActivationID id;
-        private ActivationDesc desc;
-
-        LogRegisterObject(ActivationID id, ActivationDesc desc) {
-            this.id = id;
-            this.desc = desc;
-        }
-
-        Object apply(Object state) {
-            try {
-                ((Activation) state).getGroupEntry(desc.getGroupID()).
-                    registerObject(id, desc, false);
-            } catch (Exception ignore) {
-                System.err.println(
-                    MessageFormat.format(
-                        getTextResource("rmid.log.recover.warning"),
-                        "LogRegisterObject"));
-                ignore.printStackTrace();
-            }
-            return state;
-        }
-    }
-
-    /**
-     * Log record for unregistering an object.
-     */
-    private static class LogUnregisterObject extends LogRecord {
-        /** indicate compatibility with JDK 1.2 version of class */
-        private static final long serialVersionUID = 6269824097396935501L;
-        private ActivationID id;
-
-        LogUnregisterObject(ActivationID id) {
-            this.id = id;
-        }
-
-        Object apply(Object state) {
-            try {
-                ((Activation) state).getGroupEntry(id).
-                    unregisterObject(id, false);
-            } catch (Exception ignore) {
-                System.err.println(
-                    MessageFormat.format(
-                        getTextResource("rmid.log.recover.warning"),
-                        "LogUnregisterObject"));
-                ignore.printStackTrace();
-            }
-            return state;
-        }
-    }
-
-    /**
-     * Log record for registering a group.
-     */
-    private static class LogRegisterGroup extends LogRecord {
-        /** indicate compatibility with JDK 1.2 version of class */
-        private static final long serialVersionUID = -1966827458515403625L;
-        private ActivationGroupID id;
-        private ActivationGroupDesc desc;
-
-        LogRegisterGroup(ActivationGroupID id, ActivationGroupDesc desc) {
-            this.id = id;
-            this.desc = desc;
-        }
-
-        Object apply(Object state) {
-            // modify state directly; cant ask a nonexistent GroupEntry
-            // to register itself.
-            ((Activation) state).groupTable.put(id, ((Activation) state).new
-                                                GroupEntry(id, desc));
-            return state;
-        }
-    }
-
-    /**
-     * Log record for udpating an activation desc
-     */
-    private static class LogUpdateDesc extends LogRecord {
-        /** indicate compatibility with JDK 1.2 version of class */
-        private static final long serialVersionUID = 545511539051179885L;
-
-        private ActivationID id;
-        private ActivationDesc desc;
-
-        LogUpdateDesc(ActivationID id, ActivationDesc desc) {
-            this.id = id;
-            this.desc = desc;
-        }
-
-        Object apply(Object state) {
-            try {
-                ((Activation) state).getGroupEntry(id).
-                    setActivationDesc(id, desc, false);
-            } catch (Exception ignore) {
-                System.err.println(
-                    MessageFormat.format(
-                        getTextResource("rmid.log.recover.warning"),
-                        "LogUpdateDesc"));
-                ignore.printStackTrace();
-            }
-            return state;
-        }
-    }
-
-    /**
-     * Log record for unregistering a group.
-     */
-    private static class LogUpdateGroupDesc extends LogRecord {
-        /** indicate compatibility with JDK 1.2 version of class */
-        private static final long serialVersionUID = -1271300989218424337L;
-        private ActivationGroupID id;
-        private ActivationGroupDesc desc;
-
-        LogUpdateGroupDesc(ActivationGroupID id, ActivationGroupDesc desc) {
-            this.id = id;
-            this.desc = desc;
-        }
-
-        Object apply(Object state) {
-            try {
-                ((Activation) state).getGroupEntry(id).
-                    setActivationGroupDesc(id, desc, false);
-            } catch (Exception ignore) {
-                System.err.println(
-                    MessageFormat.format(
-                        getTextResource("rmid.log.recover.warning"),
-                        "LogUpdateGroupDesc"));
-                ignore.printStackTrace();
-            }
-            return state;
-        }
-    }
-
-    /**
-     * Log record for unregistering a group.
-     */
-    private static class LogUnregisterGroup extends LogRecord {
-        /** indicate compatibility with JDK 1.2 version of class */
-        private static final long serialVersionUID = -3356306586522147344L;
-        private ActivationGroupID id;
-
-        LogUnregisterGroup(ActivationGroupID id) {
-            this.id = id;
-        }
-
-        Object apply(Object state) {
-            GroupEntry entry = ((Activation) state).groupTable.remove(id);
-            try {
-                entry.unregisterGroup(false);
-            } catch (Exception ignore) {
-                System.err.println(
-                    MessageFormat.format(
-                        getTextResource("rmid.log.recover.warning"),
-                        "LogUnregisterGroup"));
-                ignore.printStackTrace();
-            }
-            return state;
-        }
-    }
-
-    /**
-     * Log record for an active group incarnation
-     */
-    private static class LogGroupIncarnation extends LogRecord {
-        /** indicate compatibility with JDK 1.2 version of class */
-        private static final long serialVersionUID = 4146872747377631897L;
-        private ActivationGroupID id;
-        private long inc;
-
-        LogGroupIncarnation(ActivationGroupID id, long inc) {
-            this.id = id;
-            this.inc = inc;
-        }
-
-        Object apply(Object state) {
-            try {
-                GroupEntry entry = ((Activation) state).getGroupEntry(id);
-                entry.incarnation = inc;
-            } catch (Exception ignore) {
-                System.err.println(
-                    MessageFormat.format(
-                        getTextResource("rmid.log.recover.warning"),
-                        "LogGroupIncarnation"));
-                ignore.printStackTrace();
-            }
-            return state;
-        }
-    }
-
-    /**
-     * Initialize command to exec a default group.
-     */
-    private void initCommand(String[] childArgs) {
-        command = new String[childArgs.length + 2];
-        AccessController.doPrivileged(new PrivilegedAction<Void>() {
-            public Void run() {
-                try {
-                    command[0] = System.getProperty("java.home") +
-                        File.separator + "bin" + File.separator + "java";
-                } catch (Exception e) {
-                    System.err.println(
-                        getTextResource("rmid.unfound.java.home.property"));
-                    command[0] = "java";
-                }
-                return null;
-            }
-        });
-        System.arraycopy(childArgs, 0, command, 1, childArgs.length);
-        command[command.length-1] = "sun.rmi.server.ActivationGroupInit";
     }
 
     private static void bomb(String error) {
@@ -1850,9 +1351,7 @@ public class Activation implements Serializable {
                         return Policy.getPolicy();
                     }
                 });
-            if (!(policy instanceof PolicyFile)) {
-                return;
-            }
+
             PermissionCollection perms = getExecPermissions();
             for (Enumeration<Permission> e = perms.elements();
                  e.hasMoreElements();)
@@ -2066,22 +1565,6 @@ public class Activation implements Serializable {
                 system.shutdown();
                 System.exit(0);
             }
-
-            /*
-             * Fix for 4173960: Create and initialize activation using
-             * a static method, startActivation, which will build the
-             * Activation state in two ways: if when rmid is run, no
-             * log file is found, the ActLogHandler.recover(...)
-             * method will create a new Activation instance.
-             * Alternatively, if a logfile is available, a serialized
-             * instance of activation will be read from the log's
-             * snapshot file.  Log updates will be applied to this
-             * Activation object until rmid's state has been fully
-             * recovered.  In either case, only one instance of
-             * Activation is created.
-             */
-            startActivation(port, ssf, log,
-                            childArgs.toArray(new String[childArgs.size()]));
 
             // prevent activator from exiting
             while (true) {

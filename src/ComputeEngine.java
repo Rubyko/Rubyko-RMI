@@ -1,7 +1,6 @@
 import java.io.IOException;
-import java.net.ServerSocket;
-import java.net.Socket;
 
+import rubyko.java.rmi.RemoteException;
 import rubyko.java.rmi.registry.LocateRegistry;
 import rubyko.java.rmi.registry.Registry;
 import rubyko.java.rmi.server.UnicastRemoteObject;
@@ -12,8 +11,9 @@ class ComputeEngine implements Compute {
 		super();
 	}
 
-	public <T> T executeTask(Task<T> t) {
-		return t.execute();
+	@Override
+	public double add(double p1, double p2) throws RemoteException {
+		return p1 + p2;
 	}
 
 	public static void main(String[] args) throws IOException {
