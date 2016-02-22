@@ -32,42 +32,6 @@
 
 package rubyko.com.sun.corba.se.impl.util;
 
-import org.omg.CORBA.SystemException;
-import org.omg.CORBA.CompletionStatus;
-import org.omg.CORBA.BAD_OPERATION;
-import org.omg.CORBA.BAD_INV_ORDER;
-import org.omg.CORBA.BAD_PARAM;
-import org.omg.CORBA.ORB;
-import org.omg.CORBA.Any;
-import org.omg.CORBA.TypeCode;
-import org.omg.CORBA.Principal;
-import org.omg.CORBA.portable.InputStream;
-import org.omg.CORBA.portable.OutputStream;
-import org.omg.CORBA.portable.BoxedValueHelper;
-import org.omg.CORBA.portable.ValueFactory;
-import org.omg.CORBA.portable.Streamable;
-import org.omg.CORBA.portable.Delegate;
-
-
-import java.util.Hashtable;
-import java.util.NoSuchElementException;
-
-import java.rmi.Remote;
-import java.rmi.NoSuchObjectException;
-import java.rmi.RemoteException;
-import java.rmi.server.RemoteStub;
-
-import javax.rmi.PortableRemoteObject;
-import javax.rmi.CORBA.Stub;
-import javax.rmi.CORBA.Tie;
-import javax.rmi.CORBA.Util;
-
-import java.io.Serializable;
-import java.io.File;
-import java.io.FileInputStream;
-
-import org.omg.PortableServer.POA;
-
 
 /**
  *  Handy class full of static functions.
@@ -80,25 +44,5 @@ public final class Utility {
     public static final String IDL_STUB_SUFFIX = "Stub";
     public static final String TIE_SUFIX = "_Tie";
 
-
-    /**
-     * Create an RMI tie name.
-     */
-    public static String tieName (String className)
-    {
-        return "bla";
-         //   PackagePrefixChecker.hasOffendingPrefix(tieNameForCompiler(className)) ?
-         //   PackagePrefixChecker.packagePrefix() + tieNameForCompiler(className) :
-          //  tieNameForCompiler(className);
-    }
 }
 
-class StubEntry {
-    org.omg.CORBA.Object stub;
-    boolean mostDerived;
-
-    StubEntry(org.omg.CORBA.Object stub, boolean mostDerived) {
-        this.stub = stub;
-        this.mostDerived = mostDerived;
-    }
-}

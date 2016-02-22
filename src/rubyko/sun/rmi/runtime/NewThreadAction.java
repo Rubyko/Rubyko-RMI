@@ -25,7 +25,6 @@
 
 package rubyko.sun.rmi.runtime;
 
-import java.security.AccessController;
 import java.security.PrivilegedAction;
 import rubyko.sun.security.util.SecurityConstants;
 
