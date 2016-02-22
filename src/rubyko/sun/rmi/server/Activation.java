@@ -47,12 +47,10 @@ import java.nio.file.Files;
 import java.nio.channels.Channel;
 import java.nio.channels.ServerSocketChannel;
 import rubyko.java.rmi.AccessException;
-import rubyko.java.rmi.AlreadyBoundException;
 import rubyko.java.rmi.ConnectException;
 import rubyko.java.rmi.ConnectIOException;
 import rubyko.java.rmi.MarshalledObject;
 import rubyko.java.rmi.NoSuchObjectException;
-import rubyko.java.rmi.NotBoundException;
 import rubyko.java.rmi.Remote;
 import rubyko.java.rmi.RemoteException;
 import rubyko.java.rmi.activation.ActivationDesc;
@@ -67,12 +65,9 @@ import rubyko.java.rmi.activation.ActivationSystem;
 import rubyko.java.rmi.activation.Activator;
 import rubyko.java.rmi.activation.UnknownGroupException;
 import rubyko.java.rmi.activation.UnknownObjectException;
-import rubyko.java.rmi.registry.Registry;
 import rubyko.java.rmi.server.ObjID;
 import rubyko.java.rmi.server.RMIClassLoader;
-import rubyko.java.rmi.server.RMIClientSocketFactory;
 import rubyko.java.rmi.server.RMIServerSocketFactory;
-import rubyko.java.rmi.server.RemoteObject;
 import rubyko.java.rmi.server.RemoteServer;
 import rubyko.java.rmi.server.UnicastRemoteObject;
 import java.security.AccessControlException;
@@ -314,7 +309,7 @@ public class Activation implements Serializable {
             LiveRef lref = new LiveRef(new ObjID(4), port, null, ssf);
             UnicastServerRef uref = new UnicastServerRef(lref);
             ref = uref;
-            uref.exportObject(this, null);
+            uref.exportObject(this, null, false);
         }
 
         public ActivationID registerObject(ActivationDesc desc)
@@ -1339,33 +1334,7 @@ public class Activation implements Serializable {
             }
         }
 
-        /**
-         * Prints warning message if installed Policy is the default Policy
-         * implementation and globally granted permissions do not include
-         * AllPermission or any ExecPermissions/ExecOptionPermissions.
-         */
-        static void checkConfiguration() {
-            Policy policy =
-                AccessController.doPrivileged(new PrivilegedAction<Policy>() {
-                    public Policy run() {
-                        return Policy.getPolicy();
-                    }
-                });
-
-            PermissionCollection perms = getExecPermissions();
-            for (Enumeration<Permission> e = perms.elements();
-                 e.hasMoreElements();)
-            {
-                Permission p = e.nextElement();
-                if (p instanceof AllPermission ||
-                    p instanceof ExecPermission ||
-                    p instanceof ExecOptionPermission)
-                {
-                    return;
-                }
-            }
-            System.err.println(getTextResource("rmid.exec.perms.inadequate"));
-        }
+     
 
         private static PermissionCollection getExecPermissions() {
             /*
@@ -1520,7 +1489,6 @@ public class Activation implements Serializable {
                 new GetPropertyAction("sun.rmi.activation.execPolicy", null));
             if (execPolicyClassName == null) {
                 if (!stop) {
-                    DefaultExecPolicy.checkConfiguration();
                 }
                 execPolicyClassName = "default";
             }

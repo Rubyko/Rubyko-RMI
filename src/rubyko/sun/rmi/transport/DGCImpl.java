@@ -262,7 +262,6 @@ final class DGCImpl implements DGC {
                         Remote stub =
                             Util.createProxy(DGCImpl.class,
                                              new UnicastRef(ref), true);
-                        disp.setSkeleton(dgc);
                         Target target =
                             new Target(dgc, disp, stub, dgcID, true);
                         ObjectTable.putTarget(target);
