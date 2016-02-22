@@ -1,3 +1,3 @@
 #Remote method invocation. JAVA native. 
 
-Better don't use it in android application ! A lot of rewriting is needed !
+Better don't use it in android application ! A lot of rewriting is needed ! Why ? Because of the back compatibility !! A lot of dinosaurs are hidden...
